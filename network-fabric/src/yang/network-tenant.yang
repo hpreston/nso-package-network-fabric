@@ -1,0 +1,140 @@
+module network-tenant {
+
+  namespace "http://learning.cisco.com/network-tenant";
+  prefix network-tenant;
+  yang-version 1.1;
+
+  import ietf-inet-types {
+    prefix inet;
+  }
+  import tailf-common {
+    prefix tailf;
+  }
+  import tailf-ncs {
+    prefix ncs;
+  }
+
+  import network-fabric { 
+      prefix fabric;
+  }
+
+  description
+    "This model describes a network-tenant object as part of the larger network-fabric service. 
+    
+    A network tenant represents logical collection of network resources for some unifying purpose.  While exceptions could be configured and used, a common use of a network tenant is as a single 'security zone'.  A network tenant must be created within a single network fabric, though a single network fabric will likely host multiple network tenants.  Most network tenants will have a single layer 3 domain (aka VRF), however special cases could exist where a tenant has no layer 3 domains or more than 1.  
+
+    When a network tenant is defined and associated with a network fabric, all network elements within the fabric will be configured to support the tenant's resources.";
+    
+  revision 2021-07-09 {
+    description
+      "Initial release of model.";
+  }
+
+  list network-tenant {
+      tailf:info "A network-tenant is a representation of a collection of network resources (ie segments) for a common purpose.";
+
+      uses ncs:service-data;
+      ncs:servicepoint network-tenant-servicepoint;
+
+      key name; 
+      leaf name {
+          tailf:info "Unique name for this tenant.";
+          type string {
+            length 0..20;
+          }
+      }
+
+      leaf fabric { 
+          tailf:info "The network-fabric on which this tenant will be created.";
+          type leafref { 
+              path "/fabric:network-fabric/fabric:name";
+          }
+          mandatory true;
+      }
+
+      container layer3 {
+          tailf:info "IP routing related configuration for the tenant.";
+
+          // Note: The use of "enabled" as the leaf with type of boolean results in enabled/disabled config rather
+          //       than enabled true/false configuration. Need to see how this is addressed in Python
+          leaf enabled {
+              tailf:info "Will the network-fabric support providing Layer 3 service (routing) to segments for this tenant. (ie create SVIs)";
+              type boolean; 
+              default true;
+          }
+
+          // TODO: Is there a way to have a default value when enabled, but empty list if disabled? Can certainly handle in Python
+          leaf-list vrf {
+              tailf:info "VRFs configured for a layer3 enabled tenant. The tenant name will be prepended onto the VRF name given here when configured on devices. Default is a single vrf called 'default'";
+              type string {
+                length 0..10;
+              }
+
+              default "default";
+          }
+      }
+
+    container test {
+      tailf:info "Test and verifications to run on the network-tenant";
+
+      action tenant { 
+        tailf:actionpoint network-tenant-full-test; 
+        tailf:info "Test and verifications to run on the network-tenant";
+
+        input { 
+          leaf level { 
+            tailf:info "The type of test to run, quick or full.";
+
+            type enumeration { 
+              enum quick; 
+              enum full; 
+            }
+            default quick;
+          }
+        }
+
+        output { 
+          leaf success { 
+            tailf:info "True/False status of the test";
+            type boolean; 
+          }
+
+          leaf message { 
+            tailf:info "General output message regarding status of the test.";
+            type string;
+          }
+
+          list details { 
+            tailf:info "Detailed message and results from the test.";
+            leaf test { 
+              tailf:info "The relevant test the message relates to.";
+              type string; 
+            }
+            leaf message { 
+              tailf:info "Informational message";
+              type string; 
+            }
+          }          
+
+          list error { 
+            tailf:info "Details about any errors occuring during the test";
+            leaf test { 
+              tailf:info "The relevant test the error occurred during.";
+              type string; 
+            }
+            leaf message { 
+              tailf:info "Informational error message";
+              type string; 
+            }
+          }
+        }
+      }
+
+    }
+
+
+
+  }
+
+
+}

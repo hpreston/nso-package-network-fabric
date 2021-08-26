@@ -1,0 +1,18 @@
+<devices xmlns="http://tail-f.com/ns/ncs">
+  <device>
+    <name>{$DEVICE_NAME}</name>
+    <config>
+
+      <!-- NX-OS Switches -->
+      <spanning-tree xmlns="http://tail-f.com/ned/cisco-nx">
+        <mode>rapid-pvst</mode>
+      </spanning-tree>
+
+      <!-- IOS Switches -->
+      <spanning-tree xmlns="urn:ios">
+        <mode>rapid-pvst</mode>
+      </spanning-tree>      
+
+    </config>
+  </device>
+</devices>

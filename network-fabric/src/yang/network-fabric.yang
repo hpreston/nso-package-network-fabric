@@ -1,0 +1,803 @@
+module network-fabric {
+
+  namespace "http://learning.cisco.com/network-fabric";
+  prefix network-fabric;
+  yang-version 1.1;
+
+  import ietf-inet-types {
+    prefix inet;
+  }
+  import tailf-common {
+    prefix tailf;
+  }
+  import tailf-ncs {
+    prefix ncs;
+  }
+
+  // For referncing vnic templates and other UCS objects 
+  import tailf-ned-cisco-ucs {
+    prefix ucs;
+  }
+
+  // For referencing NX related objects 
+  import tailf-ned-cisco-nx { 
+    prefix nx;
+  }
+
+  // For referencing IOS related objects 
+  import tailf-ned-cisco-ios { 
+    prefix ios;
+  }
+
+  // For referencing VMware related objects 
+  import tailf-ned-vmware-vsphere-portgroup-cfg { 
+    prefix vmw;
+  }
+
+  description
+    "This is a package for Cisco NSO that aims to provide a simple method for configuring a network using the abstractions of a fabric, tenant, segment, router, and firewall.  The goal is to provide network service data models that allow users to configure the key network attributes for instances of these services, and allow the templates and logic within the service to generate device specific configurations with the defaults and best practices for the organization.";
+
+  revision 2021-04-05 {
+    description
+      "Initial revision.";
+  }
+
+  list network-fabric {
+    tailf:info "A network fabric represents a collection of network elements that are connected in such as way where they can be treated as a single 'network' object.";
+
+    key name;
+    leaf name {
+      tailf:info "Unique name for this fabric.";
+      type string;
+    }
+
+    leaf description {
+      type string; 
+      tailf:info "Useful information about this fabric";
+    }
+
+    container spanning-tree { 
+      tailf:info "Network Fabric Spanning-Tree Configurations"; 
+
+      container root { 
+        tailf:info "The spanning-tree root for the fabric";
+        choice choice-root {
+          // To simplify the code to maintain the root consistenty, making this mandatory
+          mandatory true;
+
+          // What will the root of the spanning-tree network be
+          // If not explicitly configured, it will be auto-selected to be
+          //   1. The switch-pair with the greatest number of fabric-trunks 
+          //       - If no "winner" determined, "first" when sorted
+          //   2. The independent switch the greatest number of fabric-trunks
+          //       - If no "winner" determined, "first" when sorted
+
+          case case-switch-pair {
+            leaf switch-pair { 
+              tailf:info "The switch-pair from the fabric that should be configured as spanning-tree root";
+              type leafref { 
+                path "../../../switch-pair/name";
+              }
+            }
+          }
+
+          case case-switch {
+            leaf switch { 
+              tailf:info "The switch from the fabric that should be configured as spanning-tree root";
+              type leafref { 
+                path "../../../switch/device";
+              }
+            }
+          }
+
+        }
+      }
+    }
+
+
+    list switch-pair {
+      tailf:info "A pair of network switches which are deployed in the fabric to offer connectivity redundancy. Configuration (and port usage) is common within the pair.";
+      ordered-by user; 
+
+      key name; 
+      leaf name { 
+        type string; 
+        tailf:info "A name for this switch-pair"; 
+      }
+
+      leaf description {
+        type string; 
+        tailf:info "Useful information about this switch-pair";
+      }
+
+
+      // This is a single leaf list rather than leaf-list to mimic the "switch" list for Python and template re-use
+      list switch {
+        ordered-by user; 
+        tailf:info "The two devices which make up the switch pair. The first entered will be hold primary roles where appropriate.";
+        min-elements 2;
+        max-elements 2;
+
+        key device; 
+        leaf device { 
+          type leafref { 
+            path "/ncs:devices/ncs:device/ncs:name"; 
+          }
+
+          // Constraint: Limit the types of NEDs supported for devices 
+          must '
+            contains(/ncs:devices/ncs:device[ncs:name=current()]/ncs:device-type/ncs:cli/ncs:ned-id, "cisco-nx")
+            or contains(/ncs:devices/ncs:device[ncs:name=current()]/ncs:device-type/ncs:cli/ncs:ned-id, "cisco-ios-cli")
+            ' {
+            error-message "Only switches using the NEDs for cisco-nx, cisco-ios-cli are supported.";
+          }
+
+
+          // Constraints 
+          //  - A network device cannot be a part of more than one fabric 
+          //  - Get a count of how many times each switch shows up in any network fabric
+          must "
+                count(/network-fabric/switch-pair/switch[device = current()]) = 1
+                " {
+            error-message "A device cannot be a member of more than one switch-pair.";
+            tailf:dependency ".";
+          }
+
+
+        }
+
+      }
+
+      // Constraints
+      //  - Same NED as primary 
+      must "/ncs:devices/ncs:device[ncs:name=current()/switch[1]/device]/ncs:device-type/ncs:cli/ncs:ned-id = /ncs:devices/ncs:device[ncs:name=current()/switch[2]/device]/ncs:device-type/ncs:cli/ncs:ned-id" {
+        error-message "primary and secondary members of a switch pair must use the same NED";
+      }
+
+      //  - Same model as primary
+      // TODO: This condition won't compile because platform/model is a non-config attribute
+      // must "/ncs:devices/ncs:device[ncs:name=current()/secondary]/ncs:platform/ncs:model = /ncs:devices/ncs:device[ncs:name=current()/primary]/ncs:platform/ncs:model" {
+      //   error-message "primary and secondary members of a switch pair must be the same model";
+      // }
+
+
+      leaf layer3 { 
+        tailf:info "Whether this switch-pair will provide layer3 functionality within the fabric.";
+        type boolean; 
+        default false; 
+  
+        // Constraint: Only a single switch-pair in a fabric should have layer3 set to true 
+        must "count(/network-fabric[name=current()/../../name]/switch-pair[layer3 = 'true']) <= 1" {
+          error-message "Only a single switch-pair for a fabric can have layer3 function enabled.";
+        }
+      }
+
+      container multiswitch-peerlink { 
+        tailf:info "Details regarding the switch-pair 'peerlink' connection. For example a Nexus VPC Peerlink.";
+        tailf:cli-show-no;
+
+        list port-channel { 
+          tailf:info "The port-channel interface used to create the switch pair peerlink.";
+          // Creating as list type in YANG to make interface consistent with how the fabric-trunk interface looks
+          //   but need to only allow a single element in this list
+          max-elements 1; 
+          min-elements 1;
+
+          key name; 
+          leaf name {
+            type string {
+              tailf:info "<1-4096>;;Port Channel number";
+              pattern "[0-9]+(\\.[0-9]+)?";
+            }
+          }
+
+          // TODO: Some validation logic here. Proper range, an ID number that is NOT already in use
+
+          container member-interface { 
+            tailf:info "A physical interface on the switch that will be used to create the peerlink"; 
+
+            choice member-interface {
+              // Depending on type of platform there will be different types of interfaces
+
+                // For cisco-nx devices
+                case nx-Ethernet {
+                  leaf-list Ethernet { 
+                    // TODO: Would be nice ot use a leafref to the interfaces on the first switch in the pair.. but can't get this XPATH to work
+                    // type leafref { 
+                    //   path "deref(../../switch[1])/../../name";
+                    //   // path "/ncs:devices/ncs:device[ncs:name=current()/../../../switch[1]]/ncs:config/nx:interface/nx:Ethernet/nx:name";
+                    //   // path "/ncs:devices/ncs:device[ncs:name=current()/../../../switch[1]]/ncs:config/nx:interface/nx:Ethernet";
+                    
+                    // }
+                    type string {
+                      tailf:info "<1-253>/<1-256>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // Saving this pattern as a reference for a String value that includes the Interface Type as well as ID
+                      // pattern "(([Ee]thernet)|([Pp]ort-channel)|([Vv]lan)|([Bb]di)|([Mm]gmt))[0-9/\\.]+";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+                  }
+                }
+
+                // TODO: Add case for different IOS type interfaces 
+            }
+          }
+        // Constraints to implement
+        //   - Port Channel ID doesn't already exist on the switch 
+        //   - Member Interface IDs are valid 
+        //   - At least 1 member interface configured 
+        }
+      }
+
+      container fabric-trunk {
+        tailf:info "Links that connect fabric devices together and pass all network segments.";
+
+        // key port-channel;
+
+        list port-channel {
+          tailf:info "Port Channel for trunk";
+          key name; 
+          leaf name {
+            type string {
+              tailf:info "<1-4096>;;Port Channel number";
+              pattern "[0-9]+(\\.[0-9]+)?";
+            }
+            // Constraint - Not same as peerlink ID 
+          }
+
+          leaf description {
+            type string; 
+            tailf:info "Useful information about this port-channel";
+          }
+
+          container fabric-peer {
+            tailf:info "Another device within the fabric this trunk links to.";
+            choice fabric-peer {
+
+              case switch-pair {
+                leaf switch-pair {
+                  tailf:info "Another switch-pair from the same fabric."; 
+                  type leafref {
+                    path "../../../../../switch-pair/name";
+                  }
+
+                  // TODO: Add constraint to prevent configuring peer as same switch-pair this trunk is configured for 
+                }
+              }
+
+              case switch {
+                leaf switch {
+                  tailf:info "A switch from the same fabric."; 
+                  type leafref {
+                    path "../../../../../switch/device";
+                  }                  
+                }
+              }
+
+              // TODO: Consider extending fabric-peer container to explicity configure the peer fabric trunk
+
+              case fabric-interconnect {
+                leaf fabric-interconnect {
+                  tailf:info "A fabric-interconnect from the same fabric."; 
+                  type leafref {
+                    path "../../../../../fabric-interconnect/device";
+                  }                  
+                }
+              }
+
+            }
+          }
+
+          container member-interface { 
+            tailf:info "A physical interface on the switch that will be used to create the peerlink"; 
+
+  
+            choice member-interface {
+              // Depending on type of platform there will be different types of interfaces
+
+                // For cisco-nx devices
+                case nx-Ethernet {
+                  leaf-list Ethernet { 
+                    // TODO: Would be nice ot use a leafref to the interfaces on the first switch in the pair.. but can't get this XPATH to work
+                    // type leafref { 
+                    //   path "deref(../../switch[1])/../../name";
+                    //   // path "/ncs:devices/ncs:device[ncs:name=current()/../../../switch[1]]/ncs:config/nx:interface/nx:Ethernet/nx:name";
+                    //   // path "/ncs:devices/ncs:device[ncs:name=current()/../../../switch[1]]/ncs:config/nx:interface/nx:Ethernet";
+                    
+                    // }
+                    type string {
+                      tailf:info "<1-253>/<1-256>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // Saving this pattern as a reference for a String value that includes the Interface Type as well as ID
+                      // pattern "(([Ee]thernet)|([Pp]ort-channel)|([Vv]lan)|([Bb]di)|([Mm]gmt))[0-9/\\.]+";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[Ethernet=current()]) = 1
+                      and count(../../../../multiswitch-peerlink/port-channel/member-interface[Ethernet=current()]) = 0
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk or peerlink.";
+                    }
+                  }
+
+                }
+
+                // TODO: Add case for different IOS type interfaces 
+            }
+
+          }
+
+
+
+        }
+      }
+
+    }
+
+    list switch {
+      tailf:info "A single network switch member of the fabric";
+      ordered-by user; 
+
+      key device; 
+      leaf device { 
+        type leafref { 
+          path "/ncs:devices/ncs:device/ncs:name"; 
+        }
+
+        // Constraint: Limit the types of NEDs supported for devices 
+        must '
+          contains(/ncs:devices/ncs:device[ncs:name=current()]/ncs:device-type/ncs:cli/ncs:ned-id, "cisco-nx")
+          or contains(/ncs:devices/ncs:device[ncs:name=current()]/ncs:device-type/ncs:cli/ncs:ned-id, "cisco-ios-cli")
+          ' {
+          error-message "Only switches using the NEDs for cisco-nx, cisco-ios-cli are supported.";
+        }
+      }
+
+      leaf description {
+        type string; 
+        tailf:info "Useful information about this switch";
+      }
+
+
+      // Constraints 
+      //  - A switch can't also be a member of a switch-pair
+      must "
+            count(/network-fabric/switch-pair[switch = current()/device]) <= 0
+            " {
+        error-message "A device cannot be a member of a switch-pair and an independent switch. One or the other only.";
+      }
+
+      container fabric-trunk {
+        tailf:info "Links that connect fabric devices together and pass all network segments.";
+
+        // key port-channel;
+
+        list port-channel {
+          tailf:info "Port Channel for trunk";
+          key name; 
+          leaf name {
+            type string {
+              tailf:info "<1-4096>;;Port Channel number";
+              pattern "[0-9]+(\\.[0-9]+)?";
+            }
+            // Constraint - Not same as peerlink ID 
+          }
+
+          leaf description {
+            type string; 
+            tailf:info "Useful information about this port-channel";
+          }
+
+          container fabric-peer {
+            tailf:info "Another device within the fabric this trunk links to.";
+            choice fabric-peer {
+
+              case switch-pair {
+                leaf switch-pair {
+                  tailf:info "Another switch-pair from the same fabric."; 
+                  type leafref {
+                    path "../../../../../switch-pair/name";
+                  }
+
+                  // TODO: Add constraint to prevent configuring peer as same switch-pair this trunk is configured for 
+                }
+              }
+
+              case switch {
+                leaf switch {
+                  tailf:info "A switch from the same fabric."; 
+                  type leafref {
+                    path "../../../../../switch/device";
+                  }                  
+                }
+              }
+
+              // TODO: Consider extending fabric-peer container to explicity configure the peer fabric trunk
+
+              case fabric-interconnect {
+                leaf fabric-interconnect {
+                  tailf:info "A fabric-interconnect from the same fabric."; 
+                  type leafref {
+                    path "../../../../../fabric-interconnect/device";
+                  }                  
+                }
+              }
+
+            }
+          }
+
+          container member-interface { 
+            tailf:info "A physical interface on the switch that will be used to create the peerlink"; 
+
+            choice member-interface {
+              // Depending on type of platform there will be different types of interfaces
+
+                // For cisco-nx devices
+                case nx-Ethernet {
+                  leaf-list Ethernet { 
+                    // TODO: Would be nice ot use a leafref to the interfaces on the first switch in the pair.. but can't get this XPATH to work
+                    // type leafref { 
+                    //   path "deref(../../switch[1])/../../name";
+                    //   // path "/ncs:devices/ncs:device[ncs:name=current()/../../../switch[1]]/ncs:config/nx:interface/nx:Ethernet/nx:name";
+                    //   // path "/ncs:devices/ncs:device[ncs:name=current()/../../../switch[1]]/ncs:config/nx:interface/nx:Ethernet";
+                    
+                    // }
+                    type string {
+                      tailf:info "<1-253>/<1-256>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // Saving this pattern as a reference for a String value that includes the Interface Type as well as ID
+                      // pattern "(([Ee]thernet)|([Pp]ort-channel)|([Vv]lan)|([Bb]di)|([Mm]gmt))[0-9/\\.]+";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[Ethernet=current()]) = 1
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk.";
+                    }
+                  }
+
+                }
+
+                // Cases for different IOS type interfaces 
+                case ios-GigabitEthernet {
+                  leaf-list GigabitEthernet { 
+                    type string {
+                      tailf:info "<1-66>/<1-128>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[GigabitEthernet=current()]) = 1
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk.";
+                    }
+                  }
+                }
+
+                case ios-TenGigabitEthernet {
+                  leaf-list TenGigabitEthernet { 
+                    type string {
+                      tailf:info "<1-66>/<1-128>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[TenGigabitEthernet=current()]) = 1
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk.";
+                    }
+                  }
+                }
+
+                case ios-FortyGigabitEthernet {
+                  leaf-list FortyGigabitEthernet { 
+                    type string {
+                      tailf:info "<1-66>/<1-128>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[FortyGigabitEthernet=current()]) = 1
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk.";
+                    }
+                  }
+                }
+
+                case ios-HundredGigE {
+                  leaf-list HundredGigE { 
+                    type string {
+                      tailf:info "<1-66>/<1-128>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[HundredGigE=current()]) = 1
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk.";
+                    }
+                  }
+                }
+
+                case ios-TwentyFiveGigE {
+                  leaf-list TwentyFiveGigE { 
+                    type string {
+                      tailf:info "<1-66>/<1-128>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[TwentyFiveGigE=current()]) = 1
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk.";
+                    }
+                  }
+                }
+
+                case ios-TwoGigabitEthernet {
+                  leaf-list TwoGigabitEthernet { 
+                    type string {
+                      tailf:info "<1-66>/<1-128>;;Slot/chassis number";
+                      pattern "([0-9])+/([0-9])+(/([0-9])+)?(\\.[0-9]+)?";
+
+                      // TODO: Is there a way to write a must to verify that the provided string interface name exists on the switches?
+                    }
+
+                    min-elements 1; 
+                    max-elements 8;
+
+                    // Constraint - an interface can't be used in more than one fabric-trunk or in peerlink 
+                    must '
+                      count(../../../port-channel/member-interface[TwoGigabitEthernet=current()]) = 1
+                      ' {
+                      error-message "An interface can only be a member of one fabric-trunk.";
+                    }
+                  }
+                }
+
+            }
+
+          }
+
+
+
+        }
+      }
+
+    }
+
+    list fabric-interconnect {
+      tailf:info "A Cisco UCS Fabric Interconnect containing vNic Templates that will be part of the fabric";
+      ordered-by user;      
+      key device; 
+      leaf device {
+        tailf:info "A Cisco UCS Fabric Interconnect containing vNic Templates that will be part of the fabric";
+        type leafref {
+          path "/ncs:devices/ncs:device/ncs:name"; 
+        }
+
+        // Constraint: Require the use of a `cisco-ucs` NED
+        must 'contains(/ncs:devices/ncs:device[ncs:name=current()]/ncs:device-type/ncs:cli/ncs:ned-id, "cisco-ucs")' {
+          error-message "fabric-interconnect members of a fabric must use a cisco-ucs NED.";
+        }
+      }
+      
+      // Constraints 
+      //  - A fabric interconnect cannot be a part of more than one fabric 
+      must "count(/network-fabric/fabric-interconnect/device[text() = current()]) <= 1" {
+        error-message "A fabric interconnect cannot be a part of more than one fabric";
+        tailf:dependency ".";
+      }
+
+      leaf description {
+        type string; 
+        tailf:info "Useful information about this fabric-interconnect";
+      }
+
+      list vnic-template-trunk {
+        tailf:info "A vNic Template that will act as a fabric trunk, passing all network segments to connected service profiles.";
+        ordered-by user;
+        key "org vnic-template"; 
+        leaf org {
+          tailf:info "The UCS org containing the vNic Template";
+          type leafref {
+            path "/ncs:devices/ncs:device[ncs:name=current()/../../device]/ncs:config/ucs:org/ucs:org/ucs:name"; 
+          }
+        }
+
+        leaf vnic-template {
+          tailf:info "The vNic Template to make a member of the fabric.";
+          type leafref {
+            path "/ncs:devices/ncs:device[ncs:name=current()/../../device]/ncs:config/ucs:org/ucs:org[ucs:name=current()/../org]/ucs:vnic-templ/ucs:name"; 
+          }
+        }
+
+        leaf description {
+          type string; 
+          tailf:info "Useful information about this vnic-template";
+        }
+      }
+        
+    }  
+
+    list vcenter { 
+      tailf:info "A VMware vCenter containing Distributed Virtual Switches that will be part of the fabric";
+      ordered-by user; 
+
+      key device;
+      leaf device {
+        tailf:info "A VMware vCenter containing Distributed Virtual Switches that will be part of the fabric";
+        type leafref { 
+          path "/ncs:devices/ncs:device/ncs:name"; 
+        }
+
+        // Constraint: Require the 'vmware-vsphere' ned 
+        must 'contains(deref(.)/../ncs:device-type/ncs:generic/ncs:ned-id, "vmware-vsphere")' {
+          error-message "vcenter devices must use the vmware-vsphere NED";
+          tailf:dependency ".";
+        }
+      }
+
+      leaf description {
+        type string; 
+        tailf:info "Useful information about this vCenter";
+      }
+
+      list datacenter {
+        tailf:info "The VMware Datacenter object containing a vSwitch to add to the fabric";
+        key "name";
+
+        leaf name {
+          tailf:info "The VMware Datacenter object containing a vSwitch to add to the fabric";
+          type leafref {
+            path "deref(../../device)/../ncs:config/vmw:vCenter/vmw:datacenter/vmw:name";
+          }
+        }
+
+        leaf description {
+          type string; 
+          tailf:info "Useful information about this vCenter Datacenter";
+        }
+
+
+        list vSwitch {
+          tailf:info "The VMware vSwitch to add to the fabric";
+          key "name"; 
+          leaf name {
+            tailf:info "The VMware vSwitch to add to the fabric";
+            type leafref {
+              path "deref(../../name)/../vmw:vSwitch/vmw:name";
+            }
+            // TODO: Look if there is a need to build constraint to limit to dVS's only
+
+            // Constraint - A vSwitch can only be a member of a single fabric 
+            //   Note: The vCenter and Datacenter CAN be used in other fabrics, only the vSwitch is limited
+            must "count(/network-fabric/vcenter[device=current()/../../../device]/datacenter[name=current()/../../name]/vSwitch[name=current()]) = 1" {
+              error-message "A vSwitch cannot be a part of more than one fabric";
+            }
+          }
+
+          leaf description {
+            type string; 
+            tailf:info "Useful information about this vCenter vSwitch";
+          }
+        }
+
+      }
+    }
+
+    uses ncs:service-data;
+    ncs:servicepoint network-fabric-servicepoint;
+
+    // Container for holding test actions 
+    container test {
+      tailf:info "Test and verifications to run on the network-fabric";
+
+      action fabric { 
+        tailf:actionpoint network-fabric-full-test; 
+        tailf:info "Test and verifications to run on the network-fabric";
+
+        input { 
+          leaf level { 
+            tailf:info "The type of test to run, quick or full.";
+
+            type enumeration { 
+              enum quick; 
+              enum full; 
+            }
+            default quick;
+          }
+        }
+
+        output { 
+          leaf success { 
+            tailf:info "True/False status of the test";
+            type boolean; 
+          }
+
+          leaf message { 
+            tailf:info "General output message regarding status of the test.";
+            type string;
+          }
+
+          list details { 
+            tailf:info "Detailed message and results from the test.";
+            leaf test { 
+              tailf:info "The relevant test the message relates to.";
+              type string; 
+            }
+            leaf message { 
+              tailf:info "Informational message";
+              type string; 
+            }
+          }          
+
+          list error { 
+            tailf:info "Details about any errors occuring during the test";
+            leaf test { 
+              tailf:info "The relevant test the error occurred during.";
+              type string; 
+            }
+            leaf message { 
+              tailf:info "Informational error message";
+              type string; 
+            }
+          }
+        }
+      }
+
+    }
+
+  }
+
+
+}

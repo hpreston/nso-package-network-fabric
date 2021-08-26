@@ -1,0 +1,72 @@
+<config-template xmlns="http://tail-f.com/ns/config/1.0">
+
+    <devices xmlns="http://tail-f.com/ns/ncs">
+        <device>
+            <name>{$DEVICE_NAME}</name>
+            <config>
+
+                <!-- IOS Template -->
+                <interface xmlns="urn:ios">
+                    <TwoGigabitEthernet>
+                        <name>{$INTERFACE_ID}</name>
+                        <?if {$DISABLE_TRUNK_NEGOTIATION = "true"}?>
+                        <negotiation>
+                            <auto>false</auto>
+                        </negotiation>
+                        <?end?>
+                        <?if {$DESCRIPTION}?>
+                        <description>{$DESCRIPTION}</description>
+                        <?end?>
+                        <switchport>
+                            <!-- Newer switches don't support.. how to check version for command, for now disabling -->
+                            <?if {$DISABLE_TRUNK_NEGOTIATION = "true"}?>
+                            <trunk>
+                                <encapsulation>dot1q</encapsulation>
+                            </trunk>
+                            <?end?>
+                            <mode>
+                                <?if {$MODE = "trunk"}?>
+                                <trunk/>
+                                <?else?>
+                                <access/>
+                                <?end?>
+                            </mode>
+
+                            <?if {$MODE = "trunk"}?>
+                            <trunk>
+                                <?if {$VLAN_ID != "all"}?>
+                                <allowed>
+                                    <vlan>
+                                        <vlans>{$VLAN_ID}</vlans>
+                                    </vlan>
+                                </allowed>
+                                <?end?>
+                            </trunk>
+                            <?else?>
+                            <access>
+                                <vlan>{$VLAN_ID}</vlan>
+                            </access>
+                            <?end?>
+
+                        </switchport>
+                        <channel-group>
+                            <number>{$PORTCHANNEL_ID}</number>
+                            <mode>active</mode>
+                        </channel-group>
+
+                        <shutdown tags="delete" />
+
+                        <?if {$STP_GUARD_MODE}?>
+                        <spanning-tree>
+                        <guard>{$STP_GUARD_MODE}</guard>
+                        </spanning-tree>        
+                        <?end?>
+
+                    </TwoGigabitEthernet>
+                </interface>
+
+            </config>
+        </device>
+    </devices>
+
+</config-template>

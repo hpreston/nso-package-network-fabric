@@ -1,0 +1,33 @@
+<devices xmlns="http://tail-f.com/ns/ncs">
+  <device>
+    <name>{$DEVICE_NAME}</name>
+    <config>
+
+      <!-- NX-OS Switches -->
+      <spanning-tree xmlns="http://tail-f.com/ned/cisco-nx">
+        <vlan>
+          <?for VLAN_ID=1; {$VLAN_ID < 3968}; VLAN_ID={$VLAN_ID + 1}?>
+            <vlan-list>
+              <id>{$VLAN_ID}</id>
+              <priority>{$STP_PRIORITY}</priority>
+            </vlan-list>
+          <? end ?>
+        </vlan>
+      </spanning-tree>
+
+
+      <!-- IOS Switches -->
+      <spanning-tree xmlns="urn:ios">
+        <vlan>
+          <?for VLAN_ID=1; {$VLAN_ID < 3968}; VLAN_ID={$VLAN_ID + 1}?>
+            <vlan-list>
+              <id>1</id>
+              <priority>4096</priority>
+            </vlan-list>
+          <? end ?>
+        </vlan>
+      </spanning-tree>
+
+    </config>
+  </device>
+</devices>

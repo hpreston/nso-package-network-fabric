@@ -1,0 +1,31 @@
+<ncs-package xmlns="http://tail-f.com/ns/ncs-packages">
+  <name>network-fabric</name>
+  <package-version>1.0</package-version>
+  <description>This is a package for Cisco NSO that aims to provide a simple method for configuring a network using the abstractions of a fabric, tenant, segment, router, and firewall.  The goal is to provide network service data models that allow users to configure the key network attributes for instances of these services, and allow the templates and logic within the service to generate device specific configurations with the defaults and best practices for the organization.</description>
+  <ncs-min-version>5.2</ncs-min-version>
+
+  <component>
+    <name>main</name>
+    <application>
+      <python-class-name>network_fabric.main.Main</python-class-name>
+    </application>
+  </component>
+
+  <required-package>
+    <name>resource-manager</name>
+  </required-package>
+    <required-package>
+    <name>cisco-ucs-cli-3.4</name>
+  </required-package>
+  <required-package>
+    <name>cisco-ios-cli-6.69</name>
+  </required-package>
+  <required-package>
+    <name>cisco-nx-cli-5.21</name>
+  </required-package>
+  <required-package>
+    <name>vmware-vsphere-gen-3.2</name>
+  </required-package>
+
+
+</ncs-package>
