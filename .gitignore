@@ -1,0 +1,7 @@
+Dockerfile
+.mypy_cache/
+.pylint.d/
+*.fxs
+tmp/
+*.code-workspace
+scratch*
